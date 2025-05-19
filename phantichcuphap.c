@@ -8,23 +8,23 @@
 Các sản xuất: 
 1. program -> PROGRAM Ident ; Block . 
 - block:
-2. Block → ConstDecl VarDecl ProcDecls BEGIN StatementList END 
-3. ConstDecl → CONST ConstAssignList ; | ε 
-4. ConstAssignList → ConstAssign ConstAssignList' 
-5. ConstAssignList' → , ConstAssign ConstAssignList' | ε 
-6. ConstAssign → Ident = Number 
-7. VarDecl → VAR VarDeclList ; | ε 
-8. VarDeclList → VarItem VarDeclList' 
-9. VarDeclList' → , VarItem VarDeclList' | ε 
-10. VarItem → Ident | Ident [ Number ] 
-11. ProcDecls → ProcDecl ProcDecls | ε 
-12. ProcDecl → PROCEDURE Ident ProcParamsOpt ; Block ; 
-13. ProcParamsOpt → ( ParamDeclList ) | ε 
-14. ParamDeclList → ParamDecl ParamDeclList' 
-15. ParamDeclList' → ; ParamDecl ParamDeclList' | ε 
-16. ParamDecl → VAR Ident | Ident
-// 17. StatementList → Statement StatementList' 
-// 18. StatementList' → ; Statement StatementList' | ε 
+2. Block ? ConstDecl VarDecl ProcDecls BEGIN StatementList END 
+3. ConstDecl ? CONST ConstAssignList ; | e 
+4. ConstAssignList ? ConstAssign ConstAssignList' 
+5. ConstAssignList' ? , ConstAssign ConstAssignList' | e 
+6. ConstAssign ? Ident = Number 
+7. VarDecl ? VAR VarDeclList ; | e 
+8. VarDeclList ? VarItem VarDeclList' 
+9. VarDeclList' ? , VarItem VarDeclList' | e 
+10. VarItem ? Ident | Ident [ Number ] 
+11. ProcDecls ? ProcDecl ProcDecls | e 
+12. ProcDecl ? PROCEDURE Ident ProcParamsOpt ; Block ; 
+13. ProcParamsOpt ? ( ParamDeclList ) | e 
+14. ParamDeclList ? ParamDecl ParamDeclList' 
+15. ParamDeclList' ? ; ParamDecl ParamDeclList' | e 
+16. ParamDecl ? VAR Ident | Ident
+// 17. StatementList ? Statement StatementList' 
+// 18. StatementList' ? ; Statement StatementList' | e 
 - statement:
 17. statement -> assignment  
 18. statement -> callStmt  
@@ -59,15 +59,15 @@ Các sản xuất:
 45, Condition -> Expression B Expression 
 46, B -> = | > | >= | < | <= | <> 
 - expression
-47. expression → A expression' 
-48. A → + term | - term 
-49. A → term 
-50. expression' → + term expression' | - term expression' 
-51. expression' → ε 
+47. expression ? A expression' 
+48. A ? + term | - term 
+49. A ? term 
+50. expression' ? + term expression' | - term expression' 
+51. expression' ? e 
 - term
-52. term → factor term' 
-53. term' → * factor term' | / factor term' | % factor term' 
-54. term' → ε
+52. term ? factor term' 
+53. term' ? * factor term' | / factor term' | % factor term' 
+54. term' ? e
 */
 
 typedef enum {
@@ -89,7 +89,22 @@ Token tokens[MAX_TOKENS];
 int tokenCount = 0;
 int current = 0;
 
-// Forward declarations
+// Forward declarations cho các hàm phân tích ngữ nghĩa
+void initSemantic();
+void addSemanticError(const char* message, int line);
+int findVariable(const char* name);
+int findProcedure(const char* name);
+void checkAssignment(const char* varName, int isArray, int line);
+void checkCallStatement(const char* procName, int line);
+void checkIfStatement(int line);
+void checkWhileStatement(int line);
+void checkForStatement(const char* varName, int line);
+void checkCondition(int line);
+void checkExpression(int line);
+void printSemanticErrors();
+void checkStatementSemantics(TokenType stmtType, const char* varName, int line);
+
+// Forward declarations cho các hàm parse
 void parseProgram();
 void parseBlock();
 void parseConstDecl();
@@ -138,7 +153,7 @@ void loadTokens(const char* filename) {
         if (fgets(line, sizeof(line), file) == NULL) break;
         if (strlen(line) < 3) {
             lineNumber++; // Tăng số dòng 
-            continue; // Bỏ qua dòng trống/ngắn
+            continue; // Bỏ qua dòng trắng/ngắn
         }    
         if (sscanf(line, "%[^:]: %[^\n]", typeStr, lexeme) == 2) {
             Token t;
@@ -251,11 +266,169 @@ void error(const char* msg) {
     exit(1);
 }
 
+// Cấu trúc lưu trữ thông tin biến
+typedef struct {
+    char name[100];
+    int isArray;
+    int arraySize;
+    int isParam;
+    int isVarParam; // true nếu là tham số VAR
+} Variable;
+
+// Cấu trúc lưu trữ thông tin procedure
+typedef struct {
+    char name[100];
+    Variable params[100];
+    int paramCount;
+} Procedure;
+
+// Cấu trúc lưu trữ thông tin lỗi ngữ nghĩa
+typedef struct {
+    char message[200];
+    int line;
+} SemanticError;
+
+// Danh sách biến và procedure cho phân tích ngữ nghĩa
+Variable variables[1000];
+int varCount = 0;
+Procedure procedures[100];
+int procCount = 0;
+SemanticError semanticErrors[100];
+int errorCount = 0;
+
+// Các hàm phân tích ngữ nghĩa
+void initSemantic() {
+    varCount = 0;
+    procCount = 0;
+    errorCount = 0;
+}
+
+void addSemanticError(const char* message, int line) {
+    if (errorCount < 100) {
+        strcpy(semanticErrors[errorCount].message, message);
+        semanticErrors[errorCount].line = line;
+        errorCount++;
+    }
+}
+
+int findVariable(const char* name) {
+    for (int i = 0; i < varCount; i++) {
+        if (strcmp(variables[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int findProcedure(const char* name) {
+    for (int i = 0; i < procCount; i++) {
+        if (strcmp(procedures[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void checkAssignment(const char* varName, int isArray, int line) {
+    int varIndex = findVariable(varName);
+    if (varIndex == -1) {
+        addSemanticError("Bien chua duoc khai bao", line);
+        return;
+    }
+    
+    if (variables[varIndex].isArray != isArray) {
+        if (isArray) {
+            addSemanticError("Bien khong phai la mang", line);
+        } else {
+            addSemanticError("Bien la mang, khong the gan truc tiep", line);
+        }
+    }
+    
+    if (variables[varIndex].isParam && !variables[varIndex].isVarParam) {
+        addSemanticError("Khong the gan gia tri cho tham so khong phai VAR", line);
+    }
+}
+
+void checkCallStatement(const char* procName, int line) {
+    int procIndex = findProcedure(procName);
+    if (procIndex == -1) {
+        addSemanticError("Procedure chua duoc khai bao", line);
+    }
+}
+
+void checkIfStatement(int line) {
+    // Kiểm tra điều kiện trong if statement
+    checkCondition(line);
+}
+
+void checkWhileStatement(int line) {
+    // Kiểm tra điều kiện trong while statement
+    checkCondition(line);
+}
+
+void checkForStatement(const char* varName, int line) {
+    int varIndex = findVariable(varName);
+    if (varIndex == -1) {
+        addSemanticError("Bien trong vong lap FOR chua duoc khai bao", line);
+        return;
+    }
+    
+    if (variables[varIndex].isArray) {
+        addSemanticError("Khong the su dung mang trong vong lap FOR", line);
+    }
+    
+    if (variables[varIndex].isParam && !variables[varIndex].isVarParam) {
+        addSemanticError("Khong the su dung tham so khong phai VAR trong vong lap FOR", line);
+    }
+}
+
+void checkCondition(int line) {
+    // Kiểm tra biểu thức điều kiện
+    checkExpression(line);
+}
+
+void checkExpression(int line) {
+    // Kiểm tra biểu thức
+    // Trong trường hợp đơn giản, chỉ cần đảm bảo các biến được sử dụng đã được khai báo
+    // TODO: Thêm kiểm tra chi tiết hơn cho biểu thức
+}
+
+void printSemanticErrors() {
+    if (errorCount == 0) {
+        printf("Khong co loi ngu nghia nao.\n");
+        return;
+    }
+    
+    printf("\nDanh sach loi ngu nghia:\n");
+    for (int i = 0; i < errorCount; i++) {
+        printf("Dong %d: %s\n", semanticErrors[i].line, semanticErrors[i].message);
+    }
+}
+
+void checkStatementSemantics(TokenType stmtType, const char* varName, int line) {
+    switch(stmtType) {
+        case IDENT: // Assignment
+            checkAssignment(varName, peek().type == LBRACK, line);
+            break;
+        case CALL: // Call statement
+            checkCallStatement(varName, line);
+            break;
+        case IF: // If statement
+            checkIfStatement(line);
+            break;
+        case WHILE: // While statement
+            checkWhileStatement(line);
+            break;
+        case FOR: // For statement
+            checkForStatement(varName, line);
+            break;
+    }
+}
 
 void parseFactor() {
     if (match(IDENT)) {
         record(40); // 40. factor -> Ident A
-        record(41); // 41. A -> [ Expression ] | ε
+        record(41); // 41. A -> [ Expression ] | e
         return;
     }
     if (match(NUMBER)) {
@@ -279,7 +452,7 @@ void parseTerm() {
         advance();
         parseFactor();
     }
-    record(54); // 54. term' -> ε
+    record(54); // 54. term' -> e
 }
 
 void parseExpression() {
@@ -297,14 +470,18 @@ void parseExpression() {
         advance();
         parseTerm();
     }
-    record(51); // 51. expression' -> ε
+    record(51); // 51. expression' -> e
 }
 
 void parseAssignment() {
+    Token varToken = peek();
     if (!match(IDENT)) error("Expected identifier in assignment");
     parseLHS(); 
     if (!match(ASSIGN)) error("Expected ':=' in assignment");
     parseExpression();
+    
+    // Thêm kiểm tra ngữ nghĩa
+    checkStatementSemantics(IDENT, varToken.lexeme, varToken.line);
 }
 
 void parseLHS() {
@@ -313,13 +490,17 @@ void parseLHS() {
         parseExpression();
         if (!match(RBRACK)) error("Expected ']' in array access");
     } else {
-        record(25); // 25. LHS -> ε 
+        record(25); // 25. LHS -> e 
     }
 }
 
 void parseCallStmt() {
+    Token procToken = peek();
     if (!match(CALL)) error("Expected 'call'");
     if (!match(IDENT)) error("Expected procedure identifier");
+    
+    // Thêm kiểm tra ngữ nghĩa
+    checkStatementSemantics(CALL, procToken.lexeme, procToken.line);
 }
 
 void parseArgList() {
@@ -329,7 +510,7 @@ void parseArgList() {
         parseMoreArgs();
         if (!match(RPARENT)) error("Expected ')' after arguments");
     } else {
-        record(28); // 28. argList -> ε 
+        record(28); // 28. argList -> e 
     }
 }
 
@@ -339,7 +520,7 @@ void parseMoreArgs() {
         parseExpression();
         parseMoreArgs();
     } else {
-        record(30); // 30. moreArgs -> ε 
+        record(30); // 30. moreArgs -> e 
     }
 }
 
@@ -352,11 +533,14 @@ void parseCompoundStmt() {
 }
 
 void parseWhileStmt() {
+    Token whileToken = peek();
     if (!match(WHILE)) error("Expected 'while'");
-    record(38); // 38. whileStmt -> WHILE Condition DO statement
     parseCondition();
     if (!match(DO)) error("Expected 'do'");
     parseStatement();
+    
+    // Thêm kiểm tra ngữ nghĩa
+    checkStatementSemantics(WHILE, NULL, whileToken.line);
 }
 
 void parseCondition() {
@@ -376,7 +560,6 @@ void parseCondition() {
         parseExpression();
     }
 }
-
 
 void parseStatement() {
     Token t = peek();
@@ -410,11 +593,15 @@ void parseStatement() {
 }
 
 void parseIfStmt() {
+    Token ifToken = peek();
     if (!match(IF)) error("Expected 'if'");
     parseCondition();
     if (!match(THEN)) error("Expected 'then'");
     parseStatement();
     parseElsePart();
+    
+    // Thêm kiểm tra ngữ nghĩa
+    checkStatementSemantics(IF, NULL, ifToken.line);
 }
 
 void parseElsePart() {
@@ -422,11 +609,12 @@ void parseElsePart() {
         record(36); // 36. elsePart -> ELSE statement 
         parseStatement();
     } else {
-        record(37); // 37. elsePart -> ε 
+        record(37); // 37. elsePart -> e 
     }
 }
 
 void parseForStmt() {
+    Token varToken = peek();
     if (!match(FOR)) error("Expected 'for'");
     if (!match(IDENT)) error("Expected identifier in for loop");
     if (!match(ASSIGN)) error("Expected ':=' in for loop");
@@ -435,13 +623,16 @@ void parseForStmt() {
     parseExpression();
     if (!match(DO)) error("Expected 'do' in for loop");
     parseStatement();
+    
+    // Thêm kiểm tra ngữ nghĩa
+    checkStatementSemantics(FOR, varToken.lexeme, varToken.line);
 }
 
 void parseConstDecl() {
     if (match(CONST)) {
-        record(3);  // 3. ConstDecl → CONST ConstAssignList ; | ε
+        record(3);  // 3. ConstDecl ? CONST ConstAssignList ; | e
         do {
-            record(4);  // 4. ConstAssignList → ConstAssign ConstAssignList' 
+            record(4);  // 4. ConstAssignList ? ConstAssign ConstAssignList' 
             if (!match(IDENT)) error("Expected identifier in const declaration");
             if (!match(EQU)) error("Expected '='");
             if (!match(NUMBER)) error("Expected number in const declaration");
@@ -449,12 +640,12 @@ void parseConstDecl() {
         if (!match(SEMICOLON)) error("Expected ';' after const declaration");
     }
     else{
-        record(3);  // 3. ConstDecl → ε
+        record(3);  // 3. ConstDecl ? e
     }
 }
 
 void parseConstAssign() {
-    record(6); // 6. ConstAssign → Ident = Number 
+    record(6); // 6. ConstAssign ? Ident = Number 
     if (!match(IDENT)) error("Expected identifier in const assignment");
     if (!match(EQU)) error("Expected '=' in const assignment");
     if (!match(NUMBER)) error("Expected number in const assignment");
@@ -462,29 +653,29 @@ void parseConstAssign() {
 
 void parseConstAssignListPrime() {
     if (match(COMMA)) {
-        record(5); // 5. ConstAssignList' → , ConstAssign ConstAssignList' 
+        record(5); // 5. ConstAssignList' ? , ConstAssign ConstAssignList' 
         parseConstAssign();
         parseConstAssignListPrime();
     } else {
-        record(5); // 5. ConstAssignList' → ε 
+        record(5); // 5. ConstAssignList' ? e 
     }
 }
 
 void parseVarDecl() {
     if (match(VAR)) {
-        record(7);  // 7. VarDecl → VAR VarDeclList ; | ε
+        record(7);  // 7. VarDecl ? VAR VarDeclList ; | e
         do {
-            record(8);  // 8. VarDeclList → VarItem VarDeclList'
+            record(8);  // 8. VarDeclList ? VarItem VarDeclList'
             if (!match(IDENT)) error("Expected identifier in var declaration");
         } while (match(COMMA));
         if (!match(SEMICOLON)) error("Expected ';' after var declaration");
     } else{
-        record(7);  // 7. VarDecl → ε
+        record(7);  // 7. VarDecl ? e
     }
 }
 
 void parseVarItem() {
-    record(10); // 10. VarItem → Ident | Ident [ Number ] 
+    record(10); // 10. VarItem ? Ident | Ident [ Number ] 
     if (!match(IDENT)) error("Expected identifier in var item");
     if (match(LBRACK)) {
         if (!match(NUMBER)) error("Expected number in array declaration");
@@ -494,52 +685,52 @@ void parseVarItem() {
 
 void parseVarDeclListPrime() {
     if (match(COMMA)) {
-        record(9); // 9. VarDeclList' → , VarItem VarDeclList' 
+        record(9); // 9. VarDeclList' ? , VarItem VarDeclList' 
         parseVarItem();
         parseVarDeclListPrime();
     } else {
-        record(9); // 9. VarDeclList' → ε 
+        record(9); // 9. VarDeclList' ? e 
     }
 }
 
 void parseProcDecls() {
     if (peek().type == PROCEDURE) {
-        record(11); // 11. ProcDecls → ProcDecl ProcDecls | ε 
+        record(11); // 11. ProcDecls ? ProcDecl ProcDecls | e 
         parseProcDecl();
         parseProcDecls();
     } else {
-        record(11); // 11. ProcDecls → ε 
+        record(11); // 11. ProcDecls ? e 
     }
 }
 
 void parseProcParamsOpt() {
     if (match(LPARENT)) {
-        record(13); // 13. ProcParamsOpt → ( ParamDeclList ) | ε 
+        record(13); // 13. ProcParamsOpt ? ( ParamDeclList ) | e 
         parseParamDeclList();
         if (!match(RPARENT)) error("Expected ')' after parameter list");
     } else {
-        record(13); // 13. ProcParamsOpt → ε 
+        record(13); // 13. ProcParamsOpt ? e 
     }
 }
 
 void parseParamDeclList() {
-    record(14); // 14. ParamDeclList → ParamDecl ParamDeclList' 
+    record(14); // 14. ParamDeclList ? ParamDecl ParamDeclList' 
     parseParamDecl();
     parseParamDeclListPrime();
 }
 
 void parseParamDeclListPrime() {
     if (match(SEMICOLON)) {
-        record(15); // 15. ParamDeclList' → ; ParamDecl ParamDeclList' 
+        record(15); // 15. ParamDeclList' ? ; ParamDecl ParamDeclList' 
         parseParamDecl();
         parseParamDeclListPrime();
     } else {
-        record(15); // 15. ParamDeclList' → ε 
+        record(15); // 15. ParamDeclList' ? e 
     }
 }
 
 void parseParamDecl() {
-    record(16); // 16. ParamDecl → VAR Ident | Ident
+    record(16); // 16. ParamDecl ? VAR Ident | Ident
     if (match(VAR)) {
         if (!match(IDENT)) error("Expected identifier after 'var'");
     } else {
@@ -563,13 +754,13 @@ void parseStatementListPrime() {
             parseStatementListPrime();
         }
     } else {
-        record(34); // 34. stmtListTail -> ε  
+        record(34); // 34. stmtListTail -> e  
     }
 }
 
 void parseProcDecl() {
     while (match(PROCEDURE)) {
-        record(12);  // 12. ProcDecl → PROCEDURE Ident ProcParamsOpt ; Block ;
+        record(12);  // 12. ProcDecl ? PROCEDURE Ident ProcParamsOpt ; Block ;
         if (!match(IDENT)) error("Expected identifier after 'procedure'");
         if (!match(SEMICOLON)) error("Expected ';' after procedure header");
         parseBlock();
@@ -578,7 +769,7 @@ void parseProcDecl() {
 }
 
 void parseBlock() {
-    record(2);  // 2. Block → ConstDecl VarDecl ProcDecls BEGIN StatementList END
+    record(2);  // 2. Block ? ConstDecl VarDecl ProcDecls BEGIN StatementList END
     parseConstDecl();
     parseVarDecl();
     parseProcDecl();
@@ -586,14 +777,28 @@ void parseBlock() {
 }
 
 void parseProgram() {
-    record(1);  // 1. program → PROGRAM Ident ; Block .
+    // Khởi tạo phân tích ngữ nghĩa
+    initSemantic();
+    
+    record(1);  // 1. program -> PROGRAM Ident ; Block .
     if (!match(PROGRAM)) error("Expected 'program'");
     if (!match(IDENT)) error("Expected identifier after 'program'");
     if (!match(SEMICOLON)) error("Expected ';' after identifier");
     parseBlock();
     if (!match(PERIOD)) error("Expected '.' at the end of program");
+    
+    // In kết quả phân tích
     printf("Phan tich cu phap thanh cong va da luu vao file cuphap.txt\n\n");
     FILE* out = fopen("cuphap.txt", "w");
     fprintf(out, "%s\n", production_trace);
     fclose(out);
+    
+    // In kết quả phân tích ngữ nghĩa
+    printSemanticErrors();
+}
+
+int main() {
+    loadTokens("token.txt");
+    parseProgram();
+    return 0;
 }
